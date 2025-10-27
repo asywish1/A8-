@@ -1,0 +1,784 @@
+import tkinter as tk
+from tkinter import ttk, messagebox, scrolledtext
+import json
+import os
+from datetime import datetime, timedelta
+import winsound
+import threading
+import time
+
+class TokenTaskManager:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("A8社区代币交易任务管理系统")
+        self.root.geometry("950x750")
+        self.root.resizable(False, False)
+        self.root.attributes('-topmost', True)
+        
+        self.setup_styles()
+        
+        self.data_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'TokenTaskManager')
+        os.makedirs(self.data_dir, exist_ok=True)
+        self.config_file = os.path.join(self.data_dir, 'config.json')
+        self.tasks_file = os.path.join(self.data_dir, 'tasks.json')
+        self.records_file = os.path.join(self.data_dir, 'records.json')
+        self.balance_file = os.path.join(self.data_dir, 'balance.json')
+        
+        self.windows = self.load_config()
+        self.tasks = self.load_tasks()
+        self.records = self.load_records()
+        self.balance_history = self.load_balance_history()
+        
+        self.create_widgets()
+        
+        self.running = True
+        self.countdown_thread = threading.Thread(target=self.countdown_worker, daemon=True)
+        self.countdown_thread.start()
+        
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
+    
+    def setup_styles(self):
+        style = ttk.Style()
+        style.theme_use('clam')
+        
+        bg_color = '#f0f0f0'
+        accent_color = '#4a90e2'
+        dark_color = '#2c3e50'
+        
+        style.configure('TFrame', background=bg_color)
+        style.configure('TLabel', background=bg_color, foreground=dark_color)
+        style.configure('TButton', padding=6, relief="flat", background=accent_color)
+        style.map('TButton', background=[('active', '#357abd')])
+        style.configure('Accent.TButton', background=accent_color, foreground='white')
+        style.configure('Danger.TButton', background='#e74c3c', foreground='white')
+        style.configure('Success.TButton', background='#27ae60', foreground='white')
+        
+        style.configure('TNotebook', background=bg_color, borderwidth=0)
+        style.configure('TNotebook.Tab', padding=[20, 10], font=('Arial', 10))
+        
+        style.configure('Card.TFrame', background='white', relief='raised', borderwidth=1)
+        style.configure('Title.TLabel', font=('Arial', 11, 'bold'), background='white')
+        style.configure('Info.TLabel', font=('Arial', 9), background='white', foreground='#555')
+        style.configure('Countdown.TLabel', font=('Arial', 13, 'bold'), background='white')
+    
+    def load_config(self):
+        if os.path.exists(self.config_file):
+            with open(self.config_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+    
+    def save_config(self):
+        with open(self.config_file, 'w', encoding='utf-8') as f:
+            json.dump(self.windows, f, ensure_ascii=False, indent=2)
+    
+    def load_tasks(self):
+        if os.path.exists(self.tasks_file):
+            with open(self.tasks_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return []
+    
+    def save_tasks(self):
+        with open(self.tasks_file, 'w', encoding='utf-8') as f:
+            json.dump(self.tasks, f, ensure_ascii=False, indent=2)
+    
+    def load_records(self):
+        if os.path.exists(self.records_file):
+            with open(self.records_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return []
+    
+    def save_records(self):
+        with open(self.records_file, 'w', encoding='utf-8') as f:
+            json.dump(self.records, f, ensure_ascii=False, indent=2)
+    
+    def load_balance_history(self):
+        if os.path.exists(self.balance_file):
+            with open(self.balance_file, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return []
+    
+    def save_balance_history(self):
+        with open(self.balance_file, 'w', encoding='utf-8') as f:
+            json.dump(self.balance_history, f, ensure_ascii=False, indent=2)
+    
+    def create_widgets(self):
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        self.main_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.main_frame, text="📋 任务管理")
+        
+        self.settings_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.settings_frame, text="⚙️ 设置")
+        
+        self.balance_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.balance_frame, text="💰 资金管理")
+        
+        self.records_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.records_frame, text="📊 开仓记录")
+        
+        self.stats_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.stats_frame, text="📈 统计")
+        
+        self.create_main_panel()
+        self.create_settings_panel()
+        self.create_balance_panel()
+        self.create_records_panel()
+        self.create_stats_panel()
+    
+    def create_main_panel(self):
+        task_frame = ttk.LabelFrame(self.main_frame, text="任务列表", padding=10)
+        task_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        canvas = tk.Canvas(task_frame, bg='#f0f0f0', highlightthickness=0)
+        scrollbar = ttk.Scrollbar(task_frame, orient="vertical", command=canvas.yview)
+        self.task_list_frame = ttk.Frame(canvas)
+        
+        self.task_list_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=self.task_list_frame, anchor="nw", width=880)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        control_frame = ttk.LabelFrame(self.main_frame, text="添加新任务", padding=15)
+        control_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        row1 = ttk.Frame(control_frame)
+        row1.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(row1, text="代币名称:", font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        self.token_name_entry = ttk.Entry(row1, width=15, font=('Arial', 9))
+        self.token_name_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(row1, text="倒计时(分钟):", font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        self.countdown_entry = ttk.Entry(row1, width=10, font=('Arial', 9))
+        self.countdown_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(row1, text="➕ 添加任务", command=self.add_task, style='Accent.TButton').pack(side=tk.LEFT, padx=10)
+        
+        ttk.Label(control_frame, text="选择窗口及数量:", font=('Arial', 9, 'bold')).pack(anchor=tk.W, pady=(10, 5))
+        
+        self.window_frame = ttk.Frame(control_frame)
+        self.window_frame.pack(fill=tk.X, pady=5)
+        
+        self.window_vars = {}
+        self.window_amount_entries = {}
+        
+        self.refresh_task_list()
+        self.refresh_window_checkboxes(self.window_frame)
+    
+    def refresh_window_checkboxes(self, parent):
+        for widget in parent.winfo_children():
+            widget.destroy()
+        
+        self.window_vars = {}
+        self.window_amount_entries = {}
+        
+        col = 0
+        row = 0
+        max_cols = 3
+        
+        for window_id, window_name in self.windows.items():
+            item_frame = ttk.Frame(parent)
+            item_frame.grid(row=row, column=col, sticky=tk.W, padx=10, pady=5)
+            
+            var = tk.BooleanVar()
+            self.window_vars[window_id] = var
+            
+            cb = ttk.Checkbutton(item_frame, text=f"{window_name} (#{window_id})", variable=var)
+            cb.pack(side=tk.LEFT)
+            
+            ttk.Label(item_frame, text="数量:").pack(side=tk.LEFT, padx=(5, 2))
+            entry = ttk.Entry(item_frame, width=8)
+            entry.pack(side=tk.LEFT)
+            self.window_amount_entries[window_id] = entry
+            
+            col += 1
+            if col >= max_cols:
+                col = 0
+                row += 1
+    
+    def create_settings_panel(self):
+        frame = ttk.LabelFrame(self.settings_frame, text="窗口管理", padding=15)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        add_frame = ttk.Frame(frame)
+        add_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(add_frame, text="窗口序号:", font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        self.window_id_entry = ttk.Entry(add_frame, width=12)
+        self.window_id_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(add_frame, text="窗口名称:", font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        self.window_name_entry = ttk.Entry(add_frame, width=20)
+        self.window_name_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(add_frame, text="➕ 添加", command=self.add_window, style='Success.TButton').pack(side=tk.LEFT, padx=5)
+        
+        list_frame = ttk.Frame(frame)
+        list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        self.window_listbox = tk.Listbox(list_frame, height=20, font=('Arial', 10), 
+                                         bg='white', relief=tk.FLAT, borderwidth=1,
+                                         selectbackground='#4a90e2', selectforeground='white')
+        self.window_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=self.window_listbox.yview)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        self.window_listbox.config(yscrollcommand=scrollbar.set)
+        
+        ttk.Button(frame, text="🗑️ 删除选中", command=self.delete_window, style='Danger.TButton').pack(pady=5)
+        
+        self.refresh_window_list()
+    
+    def create_balance_panel(self):
+        main_frame = ttk.Frame(self.balance_frame)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        update_frame = ttk.LabelFrame(main_frame, text="更新窗口资金", padding=15)
+        update_frame.pack(fill=tk.X, pady=(0, 10))
+        
+        input_frame = ttk.Frame(update_frame)
+        input_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(input_frame, text="选择窗口:", font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        self.balance_window_var = tk.StringVar()
+        self.balance_window_combo = ttk.Combobox(input_frame, textvariable=self.balance_window_var, 
+                                                 state='readonly', width=20)
+        self.balance_window_combo.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(input_frame, text="当前金额:", font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        self.balance_amount_entry = ttk.Entry(input_frame, width=15)
+        self.balance_amount_entry.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(input_frame, text="💾 更新", command=self.update_balance, 
+                  style='Accent.TButton').pack(side=tk.LEFT, padx=10)
+        
+        history_frame = ttk.LabelFrame(main_frame, text="资金变动历史", padding=10)
+        history_frame.pack(fill=tk.BOTH, expand=True)
+        
+        columns = ("时间", "窗口", "金额", "变动")
+        self.balance_tree = ttk.Treeview(history_frame, columns=columns, show='headings', height=22)
+        
+        self.balance_tree.heading("时间", text="时间")
+        self.balance_tree.heading("窗口", text="窗口")
+        self.balance_tree.heading("金额", text="当前金额")
+        self.balance_tree.heading("变动", text="变动额")
+        
+        self.balance_tree.column("时间", width=180)
+        self.balance_tree.column("窗口", width=200)
+        self.balance_tree.column("金额", width=150)
+        self.balance_tree.column("变动", width=150)
+        
+        scrollbar = ttk.Scrollbar(history_frame, orient="vertical", command=self.balance_tree.yview)
+        self.balance_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.balance_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.refresh_balance_combo()
+        self.refresh_balance_history()
+    
+    def create_records_panel(self):
+        frame = ttk.Frame(self.records_frame)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        columns = ("时间", "代币名称", "窗口", "数量")
+        self.records_tree = ttk.Treeview(frame, columns=columns, show='headings', height=30)
+        
+        self.records_tree.heading("时间", text="时间")
+        self.records_tree.heading("代币名称", text="代币名称")
+        self.records_tree.heading("窗口", text="窗口")
+        self.records_tree.heading("数量", text="数量")
+        
+        self.records_tree.column("时间", width=180)
+        self.records_tree.column("代币名称", width=200)
+        self.records_tree.column("窗口", width=250)
+        self.records_tree.column("数量", width=150)
+        
+        style = ttk.Style()
+        style.configure("Treeview", rowheight=25, font=('Arial', 9))
+        style.configure("Treeview.Heading", font=('Arial', 10, 'bold'))
+        
+        scrollbar = ttk.Scrollbar(frame, orient="vertical", command=self.records_tree.yview)
+        self.records_tree.configure(yscrollcommand=scrollbar.set)
+        
+        self.records_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.refresh_records_list()
+    
+    def create_stats_panel(self):
+        frame = ttk.Frame(self.stats_frame)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        ttk.Button(frame, text="🔄 刷新统计", command=self.refresh_stats, 
+                  style='Accent.TButton').pack(pady=10)
+        
+        self.stats_text = scrolledtext.ScrolledText(frame, height=30, width=95, 
+                                                     font=('Consolas', 10),
+                                                     bg='white', relief=tk.FLAT, borderwidth=1)
+        self.stats_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.stats_text.tag_configure('header', font=('Arial', 12, 'bold'), foreground='#2c3e50')
+        self.stats_text.tag_configure('subheader', font=('Arial', 11, 'bold'), foreground='#34495e')
+        self.stats_text.tag_configure('value', font=('Consolas', 10), foreground='#27ae60')
+        self.stats_text.tag_configure('label', font=('Arial', 10), foreground='#555')
+        self.stats_text.tag_configure('separator', foreground='#bdc3c7')
+        
+        self.refresh_stats()
+    
+    def add_window(self):
+        window_id = self.window_id_entry.get().strip()
+        window_name = self.window_name_entry.get().strip()
+        
+        if not window_id or not window_name:
+            messagebox.showwarning("警告", "请填写完整信息")
+            return
+        
+        if window_id in self.windows:
+            messagebox.showwarning("警告", "该窗口序号已存在")
+            return
+        
+        self.windows[window_id] = window_name
+        self.save_config()
+        self.refresh_window_list()
+        self.refresh_balance_combo()
+        self.refresh_window_checkboxes(self.window_frame)
+        
+        self.window_id_entry.delete(0, tk.END)
+        self.window_name_entry.delete(0, tk.END)
+        messagebox.showinfo("成功", "窗口添加成功")
+    
+    def delete_window(self):
+        selection = self.window_listbox.curselection()
+        if not selection:
+            messagebox.showwarning("警告", "请选择要删除的窗口")
+            return
+        
+        window_id = list(self.windows.keys())[selection[0]]
+        del self.windows[window_id]
+        self.save_config()
+        self.refresh_window_list()
+        self.refresh_balance_combo()
+        self.refresh_window_checkboxes(self.window_frame)
+        messagebox.showinfo("成功", "窗口删除成功")
+    
+    def refresh_window_list(self):
+        self.window_listbox.delete(0, tk.END)
+        for window_id, window_name in self.windows.items():
+            self.window_listbox.insert(tk.END, f"#{window_id} - {window_name}")
+    
+    def refresh_balance_combo(self):
+        values = [f"#{wid} - {name}" for wid, name in self.windows.items()]
+        self.balance_window_combo['values'] = values
+        if values:
+            self.balance_window_combo.current(0)
+    
+    def update_balance(self):
+        if not self.balance_window_var.get():
+            messagebox.showwarning("警告", "请选择窗口")
+            return
+        
+        amount_str = self.balance_amount_entry.get().strip()
+        if not amount_str:
+            messagebox.showwarning("警告", "请输入金额")
+            return
+        
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            messagebox.showwarning("警告", "金额必须是数字")
+            return
+        
+        window_text = self.balance_window_var.get()
+        window_id = window_text.split(' - ')[0][1:]
+        window_name = self.windows[window_id]
+        
+        last_balance = None
+        for record in reversed(self.balance_history):
+            if record['window_id'] == window_id:
+                last_balance = record['amount']
+                break
+        
+        change = amount - last_balance if last_balance is not None else 0
+        
+        record = {
+            'time': datetime.now().isoformat(),
+            'window_id': window_id,
+            'window_name': window_name,
+            'amount': amount,
+            'change': change
+        }
+        
+        self.balance_history.append(record)
+        self.save_balance_history()
+        self.refresh_balance_history()
+        
+        self.balance_amount_entry.delete(0, tk.END)
+        messagebox.showinfo("成功", f"资金更新成功\n变动: {change:+.2f}")
+    
+    def refresh_balance_history(self):
+        self.balance_tree.delete(*self.balance_tree.get_children())
+        
+        for record in reversed(self.balance_history):
+            time_str = datetime.fromisoformat(record['time']).strftime('%Y-%m-%d %H:%M:%S')
+            change_str = f"{record['change']:+.2f}" if record['change'] != 0 else "首次记录"
+            
+            item = self.balance_tree.insert('', 0, values=(
+                time_str,
+                f"{record['window_name']} (#{record['window_id']})",
+                f"{record['amount']:.2f}",
+                change_str
+            ))
+            
+            if record['change'] > 0:
+                self.balance_tree.item(item, tags=('positive',))
+            elif record['change'] < 0:
+                self.balance_tree.item(item, tags=('negative',))
+        
+        self.balance_tree.tag_configure('positive', foreground='#27ae60')
+        self.balance_tree.tag_configure('negative', foreground='#e74c3c')
+    
+    def add_task(self):
+        token_name = self.token_name_entry.get().strip()
+        countdown_minutes = self.countdown_entry.get().strip()
+        
+        if not token_name or not countdown_minutes:
+            messagebox.showwarning("警告", "请填写代币名称和倒计时时间")
+            return
+        
+        try:
+            countdown_minutes = int(countdown_minutes)
+        except ValueError:
+            messagebox.showwarning("警告", "倒计时时间必须是数字")
+            return
+        
+        selected_windows = {}
+        for window_id, var in self.window_vars.items():
+            if var.get():
+                amount = self.window_amount_entries[window_id].get().strip()
+                if not amount:
+                    messagebox.showwarning("警告", f"请填写窗口 #{window_id} 的开仓数量")
+                    return
+                try:
+                    amount = float(amount)
+                    selected_windows[window_id] = amount
+                except ValueError:
+                    messagebox.showwarning("警告", "开仓数量必须是数字")
+                    return
+        
+        if not selected_windows:
+            messagebox.showwarning("警告", "请至少选择一个窗口")
+            return
+        
+        end_time = datetime.now() + timedelta(minutes=countdown_minutes)
+        task = {
+            'id': len(self.tasks),
+            'token_name': token_name,
+            'windows': selected_windows,
+            'countdown_minutes': countdown_minutes,
+            'end_time': end_time.isoformat(),
+            'created_time': datetime.now().isoformat()
+        }
+        
+        self.tasks.append(task)
+        self.save_tasks()
+        
+        for window_id, amount in selected_windows.items():
+            record = {
+                'time': datetime.now().isoformat(),
+                'token_name': token_name,
+                'window_id': window_id,
+                'window_name': self.windows.get(window_id, '未知'),
+                'amount': amount
+            }
+            self.records.append(record)
+        self.save_records()
+        
+        self.token_name_entry.delete(0, tk.END)
+        self.countdown_entry.delete(0, tk.END)
+        for var in self.window_vars.values():
+            var.set(False)
+        for entry in self.window_amount_entries.values():
+            entry.delete(0, tk.END)
+        
+        self.refresh_task_list()
+        self.refresh_records_list()
+        messagebox.showinfo("成功", "任务添加成功")
+    
+    def edit_task(self, task_id):
+        task = next((t for t in self.tasks if t['id'] == task_id), None)
+        if not task:
+            return
+        
+        edit_window = tk.Toplevel(self.root)
+        edit_window.title("修改任务")
+        edit_window.geometry("400x300")
+        edit_window.transient(self.root)
+        edit_window.grab_set()
+        
+        frame = ttk.Frame(edit_window, padding=20)
+        frame.pack(fill=tk.BOTH, expand=True)
+        
+        ttk.Label(frame, text="代币名称:", font=('Arial', 10)).pack(anchor=tk.W, pady=5)
+        token_entry = ttk.Entry(frame, width=30)
+        token_entry.insert(0, task['token_name'])
+        token_entry.pack(pady=5)
+        
+        ttk.Label(frame, text="延长时间(分钟):", font=('Arial', 10)).pack(anchor=tk.W, pady=5)
+        extend_entry = ttk.Entry(frame, width=30)
+        extend_entry.pack(pady=5)
+        
+        def save_changes():
+            new_name = token_entry.get().strip()
+            extend_minutes = extend_entry.get().strip()
+            
+            if new_name:
+                task['token_name'] = new_name
+            
+            if extend_minutes:
+                try:
+                    extend = int(extend_minutes)
+                    end_time = datetime.fromisoformat(task['end_time'])
+                    end_time += timedelta(minutes=extend)
+                    task['end_time'] = end_time.isoformat()
+                except ValueError:
+                    messagebox.showwarning("警告", "延长时间必须是数字")
+                    return
+            
+            self.save_tasks()
+            self.refresh_task_list()
+            edit_window.destroy()
+            messagebox.showinfo("成功", "任务修改成功")
+        
+        ttk.Button(frame, text="保存", command=save_changes, style='Accent.TButton').pack(pady=20)
+    
+    def delete_task(self, task_id):
+        if messagebox.askyesno("确认", "确定要删除这个任务吗?"):
+            self.tasks = [t for t in self.tasks if t['id'] != task_id]
+            self.save_tasks()
+            self.refresh_task_list()
+            messagebox.showinfo("成功", "任务删除成功")
+    
+    def complete_task(self, task_id):
+        if messagebox.askyesno("确认", "确定已完成这个任务吗?"):
+            self.tasks = [t for t in self.tasks if t['id'] != task_id]
+            self.save_tasks()
+            self.refresh_task_list()
+            messagebox.showinfo("成功", "任务已标记为完成")
+    
+    def refresh_task_list(self):
+        for widget in self.task_list_frame.winfo_children():
+            widget.destroy()
+        
+        sorted_tasks = sorted(self.tasks, key=lambda x: x['end_time'])
+        
+        for i, task in enumerate(sorted_tasks):
+            self.create_task_widget(task, i)
+    
+    def create_task_widget(self, task, row):
+        frame = ttk.Frame(self.task_list_frame, style='Card.TFrame', padding=12)
+        frame.grid(row=row, column=0, sticky=tk.EW, padx=5, pady=6)
+        self.task_list_frame.columnconfigure(0, weight=1)
+        
+        info_frame = ttk.Frame(frame, style='Card.TFrame')
+        info_frame.pack(fill=tk.X)
+        
+        token_label = ttk.Label(info_frame, text=f"🪙 {task['token_name']}", 
+                               font=('Arial', 11, 'bold'), background='white', foreground='#2c3e50')
+        token_label.pack(anchor=tk.W, pady=(0, 5))
+        
+        windows_text = "  |  ".join([f"{self.windows.get(wid, '未知')}(#{wid}): {amt}" 
+                                     for wid, amt in task['windows'].items()])
+        windows_label = ttk.Label(info_frame, text=f"📊 {windows_text}", style='Info.TLabel')
+        windows_label.pack(anchor=tk.W, pady=(0, 8))
+        
+        countdown_label = ttk.Label(info_frame, text="", style='Countdown.TLabel')
+        countdown_label.pack(anchor=tk.W, pady=(0, 8))
+        countdown_label.task_id = task['id']
+        
+        btn_frame = ttk.Frame(frame, style='Card.TFrame')
+        btn_frame.pack(fill=tk.X)
+        
+        ttk.Button(btn_frame, text="✏️ 修改", command=lambda: self.edit_task(task['id']), 
+                  width=8).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="🗑️ 删除", command=lambda: self.delete_task(task['id']), 
+                  style='Danger.TButton', width=8).pack(side=tk.LEFT, padx=3)
+        ttk.Button(btn_frame, text="✅ 完成", command=lambda: self.complete_task(task['id']), 
+                  style='Success.TButton', width=8).pack(side=tk.LEFT, padx=3)
+    
+    def countdown_worker(self):
+        """倒计时工作线程"""
+        alerted_tasks = set()
+        
+        while self.running:
+            try:
+                for widget in self.task_list_frame.winfo_children():
+                    if isinstance(widget, ttk.Frame):
+                        for child in widget.winfo_children():
+                            if isinstance(child, ttk.Frame):
+                                for label in child.winfo_children():
+                                    if isinstance(label, ttk.Label) and hasattr(label, 'task_id'):
+                                        task = next((t for t in self.tasks if t['id'] == label.task_id), None)
+                                        if task:
+                                            end_time = datetime.fromisoformat(task['end_time'])
+                                            remaining = end_time - datetime.now()
+                                            
+                                            if remaining.total_seconds() <= 0:
+                                                label.configure(text="⏰ 时间到!", foreground='#e74c3c')
+                                                
+                                                if task['id'] not in alerted_tasks:
+                                                    alerted_tasks.add(task['id'])
+                                                    self.root.after(0, lambda t=task: self.alert_task(t))
+                                            else:
+                                                hours = int(remaining.total_seconds() // 3600)
+                                                minutes = int((remaining.total_seconds() % 3600) // 60)
+                                                seconds = int(remaining.total_seconds() % 60)
+                                                
+                                                if hours > 0:
+                                                    countdown_text = f"⏱️ 剩余: {hours}小时 {minutes}分钟 {seconds}秒"
+                                                else:
+                                                    countdown_text = f"⏱️ 剩余: {minutes}分钟 {seconds}秒"
+                                                
+                                                if remaining.total_seconds() <= 60:
+                                                    label.configure(text=countdown_text, foreground='#e74c3c')
+                                                elif remaining.total_seconds() <= 300:
+                                                    label.configure(text=countdown_text, foreground='#f39c12')
+                                                else:
+                                                    label.configure(text=countdown_text, foreground='#27ae60')
+                
+                time.sleep(1)
+            except:
+                pass
+    
+    def alert_task(self, task):
+        """任务到期提醒"""
+        try:
+            winsound.Beep(1000, 500)
+            winsound.Beep(1200, 500)
+            winsound.Beep(1000, 500)
+        except:
+            pass
+        
+        messagebox.showinfo("任务提醒", f"任务 '{task['token_name']}' 时间到了!")
+    
+    def refresh_records_list(self):
+        """刷新开仓记录列表"""
+        self.records_tree.delete(*self.records_tree.get_children())
+        
+        for record in reversed(self.records):
+            time_str = datetime.fromisoformat(record['time']).strftime('%Y-%m-%d %H:%M:%S')
+            self.records_tree.insert('', 0, values=(
+                time_str,
+                record['token_name'],
+                f"{record['window_name']} (#{record['window_id']})",
+                f"{record['amount']:.2f}"
+            ))
+    
+    def refresh_stats(self):
+        """刷新统计信息"""
+        self.stats_text.delete(1.0, tk.END)
+        
+        if not self.records:
+            self.stats_text.insert(tk.END, "暂无开仓记录\n", 'header')
+            return
+        
+        total_count = len(self.records)
+        total_amount = sum(r['amount'] for r in self.records)
+        
+        self.stats_text.insert(tk.END, "┌" + "─" * 78 + "┐\n", 'separator')
+        self.stats_text.insert(tk.END, "│", 'separator')
+        self.stats_text.insert(tk.END, " 📊 总体统计".ljust(76), 'header')
+        self.stats_text.insert(tk.END, "  │\n", 'separator')
+        self.stats_text.insert(tk.END, "└" + "─" * 78 + "┘\n\n", 'separator')
+        
+        self.stats_text.insert(tk.END, "  总开仓次数: ", 'label')
+        self.stats_text.insert(tk.END, f"{total_count} 次\n", 'value')
+        self.stats_text.insert(tk.END, "  总开仓金额: ", 'label')
+        self.stats_text.insert(tk.END, f"{total_amount:.2f}\n\n", 'value')
+        
+        window_stats = {}
+        for record in self.records:
+            wid = record['window_id']
+            wname = record['window_name']
+            if wid not in window_stats:
+                window_stats[wid] = {'name': wname, 'count': 0, 'amount': 0}
+            window_stats[wid]['count'] += 1
+            window_stats[wid]['amount'] += record['amount']
+        
+        self.stats_text.insert(tk.END, "\n┌" + "─" * 78 + "┐\n", 'separator')
+        self.stats_text.insert(tk.END, "│", 'separator')
+        self.stats_text.insert(tk.END, " 🪟 各窗口统计".ljust(76), 'header')
+        self.stats_text.insert(tk.END, "  │\n", 'separator')
+        self.stats_text.insert(tk.END, "└" + "─" * 78 + "┘\n\n", 'separator')
+        
+        for wid, stats in sorted(window_stats.items()):
+            self.stats_text.insert(tk.END, f"  窗口 #{wid} - {stats['name']}\n", 'subheader')
+            self.stats_text.insert(tk.END, "    开仓次数: ", 'label')
+            self.stats_text.insert(tk.END, f"{stats['count']} 次\n", 'value')
+            self.stats_text.insert(tk.END, "    开仓金额: ", 'label')
+            self.stats_text.insert(tk.END, f"{stats['amount']:.2f}\n", 'value')
+            self.stats_text.insert(tk.END, "    平均金额: ", 'label')
+            self.stats_text.insert(tk.END, f"{stats['amount']/stats['count']:.2f}\n\n", 'value')
+        
+        token_stats = {}
+        for record in self.records:
+            token = record['token_name']
+            if token not in token_stats:
+                token_stats[token] = {'count': 0, 'amount': 0}
+            token_stats[token]['count'] += 1
+            token_stats[token]['amount'] += record['amount']
+        
+        self.stats_text.insert(tk.END, "\n┌" + "─" * 78 + "┐\n", 'separator')
+        self.stats_text.insert(tk.END, "│", 'separator')
+        self.stats_text.insert(tk.END, " 🪙 各代币统计".ljust(76), 'header')
+        self.stats_text.insert(tk.END, "  │\n", 'separator')
+        self.stats_text.insert(tk.END, "└" + "─" * 78 + "┘\n\n", 'separator')
+        
+        for token, stats in sorted(token_stats.items(), key=lambda x: x[1]['amount'], reverse=True):
+            self.stats_text.insert(tk.END, f"  代币: {token}\n", 'subheader')
+            self.stats_text.insert(tk.END, "    开仓次数: ", 'label')
+            self.stats_text.insert(tk.END, f"{stats['count']} 次\n", 'value')
+            self.stats_text.insert(tk.END, "    开仓金额: ", 'label')
+            self.stats_text.insert(tk.END, f"{stats['amount']:.2f}\n", 'value')
+            self.stats_text.insert(tk.END, "    平均金额: ", 'label')
+            self.stats_text.insert(tk.END, f"{stats['amount']/stats['count']:.2f}\n\n", 'value')
+        
+        if self.balance_history:
+            self.stats_text.insert(tk.END, "\n┌" + "─" * 78 + "┐\n", 'separator')
+            self.stats_text.insert(tk.END, "│", 'separator')
+            self.stats_text.insert(tk.END, " 💰 资金统计".ljust(76), 'header')
+            self.stats_text.insert(tk.END, "  │\n", 'separator')
+            self.stats_text.insert(tk.END, "└" + "─" * 78 + "┘\n\n", 'separator')
+            
+            window_balance = {}
+            for record in self.balance_history:
+                wid = record['window_id']
+                if wid not in window_balance or datetime.fromisoformat(record['time']) > datetime.fromisoformat(window_balance[wid]['time']):
+                    window_balance[wid] = record
+            
+            total_balance = sum(r['amount'] for r in window_balance.values())
+            
+            self.stats_text.insert(tk.END, "  总资金: ", 'label')
+            self.stats_text.insert(tk.END, f"{total_balance:.2f}\n\n", 'value')
+            
+            for wid, record in sorted(window_balance.items()):
+                self.stats_text.insert(tk.END, f"  {record['window_name']} (#{wid}): ", 'label')
+                self.stats_text.insert(tk.END, f"{record['amount']:.2f}\n", 'value')
+    
+    def on_closing(self):
+        """关闭程序"""
+        self.running = False
+        self.root.destroy()
+
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = TokenTaskManager(root)
+    root.mainloop()
