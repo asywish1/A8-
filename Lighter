@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import winsound
 import threading
 import time
+import shutil
+import sys
 
 class TokenTaskManager:
     def __init__(self, root):
@@ -33,6 +35,7 @@ class TokenTaskManager:
         
         self.running = True
         self.countdown_thread = threading.Thread(target=self.countdown_worker, daemon=True)
+        self.alerted_tasks = set()
         self.countdown_thread.start()
         
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -317,8 +320,11 @@ class TokenTaskManager:
         frame = ttk.Frame(self.stats_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Button(frame, text="🔄 刷新统计", command=self.refresh_stats, 
-                  style='Accent.TButton').pack(pady=10)
+        # 按钮行：刷新统计 + 初始化软件
+        btn_row = ttk.Frame(frame)
+        btn_row.pack(pady=10, anchor=tk.W)
+        ttk.Button(btn_row, text="🔄 刷新统计", command=self.refresh_stats, style='Accent.TButton').pack(side=tk.LEFT, padx=(0,8))
+        ttk.Button(btn_row, text="⚠️ 初始化软件", command=self.initialize_app, style='Danger.TButton').pack(side=tk.LEFT)
         
         self.stats_text = scrolledtext.ScrolledText(frame, height=30, width=95, 
                                                      font=('Consolas', 10),
@@ -567,11 +573,24 @@ class TokenTaskManager:
             messagebox.showinfo("成功", "任务删除成功")
     
     def complete_task(self, task_id):
-        if messagebox.askyesno("确认", "确定已完成这个任务吗?"):
-            self.tasks = [t for t in self.tasks if t['id'] != task_id]
-            self.save_tasks()
-            self.refresh_task_list()
-            messagebox.showinfo("成功", "任务已标记为完成")
+        if not messagebox.askyesno("确认", "确定已完成这个任务吗? (将重新开始倒计时)"):
+            return
+
+        task = next((t for t in self.tasks if t['id'] == task_id), None)
+        if not task:
+            return
+
+        # 重新设置结束时间为当前时间 + 原始倒计时时长（保留开仓记录与统计）
+        minutes = int(task.get('countdown_minutes', 0))
+        task['end_time'] = (datetime.now() + timedelta(minutes=minutes)).isoformat()
+
+        # 允许再次提醒
+        if hasattr(self, 'alerted_tasks'):
+            self.alerted_tasks.discard(task_id)
+
+        self.save_tasks()
+        self.refresh_task_list()
+        messagebox.showinfo("成功", "任务已重新倒计时")
     
     def refresh_task_list(self):
         for widget in self.task_list_frame.winfo_children():
@@ -615,8 +634,6 @@ class TokenTaskManager:
     
     def countdown_worker(self):
         """倒计时工作线程"""
-        alerted_tasks = set()
-        
         while self.running:
             try:
                 for widget in self.task_list_frame.winfo_children():
@@ -633,8 +650,8 @@ class TokenTaskManager:
                                             if remaining.total_seconds() <= 0:
                                                 label.configure(text="⏰ 时间到!", foreground='#e74c3c')
                                                 
-                                                if task['id'] not in alerted_tasks:
-                                                    alerted_tasks.add(task['id'])
+                                                if task['id'] not in self.alerted_tasks:
+                                                    self.alerted_tasks.add(task['id'])
                                                     self.root.after(0, lambda t=task: self.alert_task(t))
                                             else:
                                                 hours = int(remaining.total_seconds() // 3600)
@@ -771,6 +788,57 @@ class TokenTaskManager:
             for wid, record in sorted(window_balance.items()):
                 self.stats_text.insert(tk.END, f"  {record['window_name']} (#{wid}): ", 'label')
                 self.stats_text.insert(tk.END, f"{record['amount']:.2f}\n", 'value')
+    
+    def initialize_app(self):
+        """初始化软件：备份现有数据并清空配置/任务/记录/资金，然后重启程序"""
+        if not messagebox.askyesno("确认初始化", "初始化将清空所有窗口配置、任务、开仓记录和资金历史，并重启程序。\n已存在的数据会备份。确定要继续吗？"):
+            return
+
+        # 备份现有数据文件
+        ts = datetime.now().strftime("%Y%m%d%H%M%S")
+        try:
+            for f in (self.config_file, self.tasks_file, self.records_file, self.balance_file):
+                if os.path.exists(f):
+                    shutil.copy(f, f"{f}.bak.{ts}")
+        except Exception as e:
+            messagebox.showwarning("备份失败", f"备份过程中发生错误：{e}")
+            return
+
+        # 清空内存数据并写入空文件
+        self.windows = {}
+        self.tasks = []
+        self.records = []
+        self.balance_history = []
+        try:
+            self.save_config()
+            self.save_tasks()
+            self.save_records()
+            self.save_balance_history()
+        except Exception as e:
+            messagebox.showwarning("保存失败", f"清空数据时出错：{e}")
+            return
+
+        # 刷新界面
+        try:
+            self.refresh_window_list()
+            self.refresh_balance_combo()
+            self.refresh_window_checkboxes(self.window_frame)
+            self.refresh_task_list()
+            self.refresh_records_list()
+            self.refresh_balance_history()
+            self.refresh_stats()
+        except:
+            pass
+
+        messagebox.showinfo("完成", "初始化完成，已备份原数据并清空当前数据。程序将重启。")
+
+        # 重启程序
+        try:
+            self.running = False
+            python = sys.executable
+            os.execv(python, [python] + sys.argv)
+        except Exception:
+            messagebox.showinfo("重启失败", "自动重启失败，请手动重新启动程序。")
     
     def on_closing(self):
         """关闭程序"""
